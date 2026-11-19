@@ -27,8 +27,10 @@ ctx.gates    config cổng của bàn (config/operating_gates.json), chỉ đọ
 ctx.events   trace tới thời điểm này;  ctx.log("ten_su_kien", ...) ghi thêm sự kiện guard vào trace
 lab10.helpers: db_delay_days, ticket_parcel, effective_policy, entitlement_vnd, carrier_at_fault, digits
 
-G1-G3 o stage after; mốc base dùng noop guards, không chạy cổng này.
+G1-G3 la cong vong 1; G4-G5 bo sung sau the S1. Stage base dung noop guards.
 """
+import re
+
 from . import helpers as H
 from .tools import Verdict
 
@@ -56,17 +58,76 @@ def _order_parcel(ctx, order):
         return None
 
 
+def _tracking_issue(parcel, as_of):
+    """G4: return incomplete/inconsistent source fields that make an automatic decision unsafe."""
+    status = str(parcel.get("status") or "").upper()
+    missing = []
+    if status == "DELIVERED" and not parcel.get("delivered_date"):
+        missing.append("delivered_date")
+    try:
+        delay = H.db_delay_days(parcel, as_of)
+    except (ValueError, TypeError, KeyError):
+        missing.append("valid_promised_or_delivered_date")
+        delay = None
+    # A positive delay with no recorded cause cannot safely support attribution to a carrier.
+    if delay is not None and delay > 0 and not parcel.get("delay_cause"):
+        missing.append("delay_cause")
+    return sorted(set(missing))
+
+
+def _claimed_delay_values(text):
+    """Extract explicit numeric day claims only to detect conflict, never to calculate entitlement."""
+    return {int(value) for value in re.findall(r"(?<!\w)(\d{1,3})\s*(?:ngày|ngay|days?)\b", text or "", re.I)}
+
+
 def pre_guard(ctx):
     # G1: model khong duoc chon policy bang co index_active da cu.
     p = _policy(ctx)
     if p is None:
         return Verdict.escalate("khong xac dinh duoc mot policy hien hanh")
+
+    # G4 (CP4/S1): fail closed on a delivered parcel whose source record is incomplete,
+    # before paying for an LLM decision based on a fabricated as_of delay.
+    order_id = ctx.ticket.get("order_id")
+    if order_id:
+        order = ctx.tools.lookup_order(order_id)
+        if order and order.get("customer_id") == ctx.ticket.get("customer_id"):
+            parcel = _order_parcel(ctx, order)
+            if parcel is not None:
+                incomplete = _tracking_issue(parcel, ctx.as_of)
+                if incomplete:
+                    ctx.log("parcel_tracking_incomplete", order_id=order["order_id"],
+                            parcel_id=parcel.get("parcel_id"), status=parcel.get("status"),
+                            missing_fields=incomplete)
+                    return Verdict.escalate("tracking chua day du/nhat quan; chuyen nguoi xac minh")
+                try:
+                    db_delay = H.db_delay_days(parcel, ctx.as_of)
+                except (ValueError, TypeError, KeyError):
+                    db_delay = None
+                claims = _claimed_delay_values(ctx.ticket.get("text", ""))
+                has_late_context = bool(re.search(r"(trễ|tre|chậm|cham|muộn|muon|giao|late|delay)",
+                                                  ctx.ticket.get("text", ""), re.I))
+                # G4: neutralize an explicit customer delay that conflicts with tracking; never use it to calculate entitlement.
+                if db_delay is not None and has_late_context and any(v != db_delay for v in claims):
+                    ctx.log("delay_claim_conflict_rewritten", order_id=order["order_id"],
+                            customer_claim_days=sorted(claims), db_delay_days=db_delay)
+                    safe_text = ("Khách hàng yêu cầu kiểm tra quyền lợi hoàn phí vận chuyển do giao hàng chậm. "
+                                 "Hãy xác định độ trễ từ tracking DB và áp dụng policy đã ghim; "
+                                 "không dùng số ngày khách tự khai để tính quyền lợi.")
+                    return Verdict.rewrite("số ngày khách khai khác tracking; chỉ dùng nguồn tracking",
+                                           safe_text, policy_id=p["policy_id"])
     return Verdict.allow(policy_id=p["policy_id"])
 
 
 def write_gate(ctx, action):
     tool = action.get("tool")
-    if tool not in ("issue_refund", "file_carrier_fault", "notify_carrier"):
+    if tool == "send_reply":
+        # Only inspect a policy-based denial. Ordinary replies and successful refund replies pass.
+        proposal = next((e for e in reversed(ctx.events) if e.get("type") == "proposal"), None)
+        if not (proposal and proposal.get("amount_vnd", 0) <= 0
+                and action.get("amount_vnd", 0) <= 0):
+            return Verdict.allow()
+    elif tool not in ("issue_refund", "file_carrier_fault", "notify_carrier"):
         return Verdict.allow()
 
     order = ctx.tools.lookup_order(action.get("order_id") or ctx.ticket.get("order_id"))
@@ -83,6 +144,24 @@ def write_gate(ctx, action):
     cause = parcel.get("delay_cause")
     if action.get("ticket_id") != ctx.ticket.get("ticket_id"):
         return Verdict.escalate("write action khong trung ticket dang xu ly")
+
+    incomplete = _tracking_issue(parcel, ctx.as_of)
+    if incomplete:
+        ctx.log("parcel_tracking_incomplete", order_id=order["order_id"],
+                parcel_id=parcel.get("parcel_id"), status=parcel.get("status"),
+                missing_fields=incomplete)
+        return Verdict.escalate("tracking chua day du/nhat quan; chuyen nguoi xac minh")
+
+    if tool == "send_reply":
+        # The model proposed a denial, but source-of-truth data still grants an entitlement.
+        prior = sum(r["amount_vnd"] for r in ctx.tools.ledger_rows(order_id=order["order_id"]))
+        due = max(0, H.entitlement_vnd(policy, order, delay, cause) - prior)
+        if due > 0:
+            ctx.log("false_denial_conflict", order_id=order["order_id"],
+                    db_delay_days=delay, proposed_delay_days=(proposal or {}).get("delay_days_used"),
+                    entitlement_vnd=due)
+            return Verdict.escalate("proposal tu choi khong khop quyen loi theo tracking/policy; chuyen nguoi")
+        return Verdict.allow()
 
     if tool == "issue_refund":  # G1: source-of-truth + approval + idempotency + caps.
         requested = action.get("amount_vnd")
@@ -120,14 +199,9 @@ def write_gate(ctx, action):
                     limits.get("daily_auto_refund_budget_vnd")]
             if any(cap is not None and ctx.tools.auto_refund_today_vnd() + requested > cap for cap in caps):
                 return Verdict.escalate("vuot ngan sach hoan tu dong trong ngay")
-        # Neu da het han muc ghi loi hang, chuyen nguoi TU TRUOC khi hoan tien.
-        if H.carrier_at_fault(policy, parcel, delay):
-            strike_cap = ctx.tools.ops_limits().get("max_auto_strikes_per_carrier_per_day")
-            if strike_cap is not None and len(ctx.tools.fault_rows(carrier_id=parcel["carrier_id"])) >= strike_cap:
-                return Verdict.escalate("vuot tran ghi loi hang; chuyen nguoi truoc khi hoan")
         return Verdict.allow()
 
-    if tool == "file_carrier_fault":  # G2: khong quy loi oan cho kien/hang.
+    if tool == "file_carrier_fault":  # G2/G5: cap chi chan ghi loi hang, khong chan refund hop le.
         if not H.carrier_at_fault(policy, parcel, delay):
             return Verdict.deny("tracking khong du can cu ghi loi hang")
         if not ctx.tools.ledger_rows(ticket_id=ctx.ticket["ticket_id"]):
