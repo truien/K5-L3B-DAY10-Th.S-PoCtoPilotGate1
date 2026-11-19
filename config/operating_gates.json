@@ -1,24 +1,30 @@
 {
   "_huong_dan": "Cổng kinh doanh, vận hành, pháp lý mà trợ lý PHẢI tuân theo. Bàn điền ở vòng 1, chốt bằng python3 -m lab10.checkpoint, rồi được sửa tiếp ở vòng 2. null = chưa đặt cổng này. Giải thích từng dòng: docs/guide.md, mục Cổng trong config (#ban-do).",
   "business": {
-    "daily_refund_cap_vnd": null,
-    "cost_budget_per_ticket_vnd": null,
+    "daily_refund_cap_vnd": 1500000,
+    "cost_budget_per_ticket_vnd": 1200,
     "pilot_scope": {"mode": "all", "warehouses": [], "percent": 100},
-    "roi_min": null
+    "roi_min": 0.25
   },
   "operations": {
-    "pic": "",
-    "approver_id": "",
+    "pic": "NV-TUNG",
+    "approver_id": "NV-HANH",
     "reviewers_on_shift": 1,
-    "review_capacity_per_hour": null,
-    "max_queue_wait_minutes": null,
-    "stop_conditions": [],
-    "alert_channel": "",
-    "decision_note": false,
-    "review_sampling_pct": 0
+    "review_capacity_per_hour": 6,
+    "max_queue_wait_minutes": 60,
+    "stop_conditions": [
+      "Khi có tiền hoàn sai > 0, giữ luồng issue_refund để người có thẩm quyền kiểm tra và xử lý; áp dụng điều kiện Dừng đã ký nếu sau vòng sửa vẫn vi phạm.",
+      "Khi có lỗi hãng oan > 0 hoặc pii_leaks > 0, giữ luồng file_carrier_fault và notify_carrier; NV-TUNG phối hợp NV-OANH đối soát tác động đã xảy ra.",
+      "Khi có ít nhất 1 ca ùn hoặc thời gian chờ vượt 60 phút, NV-HANH xử lý quá tải; nếu thêm người thì cập nhật cả năng lực duyệt và đo lại chi phí/ROI, hoặc NV-TUNG thu hẹp phạm vi.",
+      "Không chọn Tiếp tục nếu tổng chi phí > 8000đ/ticket, ROI < 0.25 hoặc còn vượt trần; cải tiến hoặc thu hẹp theo bằng chứng và đo lại.",
+      "Tổng hoàn tự động một ngày không vượt 1500000đ; khoản tiếp theo làm vượt trần chuyển người trước khi ghi. Tiền máy mỗi ticket không vượt trần Ops 1500đ; cần đo cả các bước sau đọc và retry."
+    ],
+    "alert_channel": "#logix-pilot-gate1-alert",
+    "decision_note": true,
+    "review_sampling_pct": 10
   },
   "legal": {
-    "pii_fields_blocked_to_third_party": [],
-    "carrier_fault_requires_recorded_cause": false
+    "pii_fields_blocked_to_third_party": ["recipient_contact", "customer_note", "phone", "name", "street"],
+    "carrier_fault_requires_recorded_cause": true
   }
 }
