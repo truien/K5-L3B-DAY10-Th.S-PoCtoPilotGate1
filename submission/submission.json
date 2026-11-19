@@ -1,12 +1,16 @@
 {
-  "team": "",
-  "members": [],
-  "incident": "",
-  "decision_v1": "",
-  "decision_v2": "",
+  "team": "K5-L3B-DAY10-Th.S-PoCtoPilotGate1",
+  "members": [
+    "NguyenTrongTruyen-2A202603868",
+    "NguyenVanHung-2A202603816",
+    "TranPhamMinhSon-2A202603802"
+  ],
+  "incident": "S1",
+  "decision_v1": "Tiếp tục",
+  "decision_v2": "Tiếp tục",
   "three_lines": {
-    "environment_assumption": "",
-    "reduce_or_prevent": "",
-    "measure_in_pilot": ""
+    "environment_assumption": "Thiết kế dựa vào tracking và chính sách đã được cập nhật đúng, nhưng dữ liệu có thể sai dù đủ trường; vì vậy pilot cần đối soát POD độc lập và lịch sử lỗi hãng có timestamp để kiểm giới hạn 7 ngày.",
+    "reduce_or_prevent": "G4 ngăn tự động ghi khi phát hiện thiếu dữ liệu hoặc số ngày xung đột đã nhận diện được, G5 giữ cap lỗi hãng theo ngày mà không giữ cả khoản hoàn hợp lệ; toàn hệ thống chỉ giảm rủi ro vì còn điểm mù về cách diễn đạt và DB sai nhưng đầy đủ.",
+    "measure_in_pilot": "Trước Gate 2 cần đo lại tỷ lệ sai tracking theo POD, bỏ sót/báo nhầm monitor, quyền lợi khách, lỗi hãng trong 7 ngày, hàng chờ giờ cao điểm và chi phí/ROI trên dữ liệu cùng model thật, thay vì suy từ 65 trial S1 và 110 trial nền bằng MockLLM."
   }
 }
