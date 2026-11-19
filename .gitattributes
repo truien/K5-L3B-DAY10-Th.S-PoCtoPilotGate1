@@ -1,0 +1,10 @@
+# Keep the original lab files and future incident packs byte-identical to their hashes.
+* text eol=lf
+
+# This team's criteria and lock files were created with CRLF; preserve their bytes.
+config/acceptance_criteria.json text eol=crlf
+config/acceptance_criteria.lock text eol=crlf
+config/round1.lock text eol=crlf
+
+# Collected evidence has its own hashes and must be transferred without conversion.
+submission/** -text
